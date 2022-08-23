@@ -68,6 +68,6 @@ export class FileUtils extends ObsidianUtilsBase {
   }
 
   getActiveNoteFile() {
-    return this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
+    return this.app.workspace.getActiveFile();
   }
 }

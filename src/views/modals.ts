@@ -4,7 +4,7 @@ import {
   MarkdownView,
   SliderComponent,
   TextComponent,
-  ButtonComponent,
+  ButtonComponent, Setting,
 } from "obsidian";
 import IW from "../main";
 import { ModalBase } from "./modal-base";
@@ -17,85 +17,119 @@ import "../helpers/date-utils";
 import "../helpers/number-utils";
 import { NaturalDateSuggest } from "./date-suggest";
 import path from "path";
+import {DateParser} from "../helpers/parse-date";
 
 abstract class ReviewModal extends ModalBase {
-  protected title: string;
-  protected inputSlider: SliderComponent;
-  protected inputNoteField: TextComponent;
-  protected inputFirstRep: TextComponent;
-  protected inputQueueField: TextComponent;
-  protected titleNode: HTMLElement;
+  private _title: string;
+  private _queueFolderTC: TextComponent;
+  private _firstRepTC: TextComponent;
+  private _noteTC: TextComponent;
+  private _priorityTC: TextComponent;
+  private readonly dataParser: DateParser;
 
   constructor(plugin: IW, title: string) {
     super(plugin);
-    this.title = title;
+    this._title = title;
+    this.dataParser = plugin.dates;
   }
 
-  onOpen() {
-    let { contentEl } = this;
+  get title(): string { return this._title; }
+  get queueFolderPath(): string {
+    const queue = this._queueFolderTC.getValue() == ""
+        ? path.relative(
+            this.plugin.settings.queueFolderPath,
+            this.plugin.queue.queuePath
+        )
+        : this._queueFolderTC.getValue().withExtension(".md");
 
-    this.titleNode = contentEl.createEl("h2", { text: this.title });
+    return normalizePath(
+        [this.plugin.settings.queueFolderPath, queue].join("/")
+    );
+  }
+  get firstRep(): Date {
+    const firstRep = this._firstRepTC.getValue();
+    return this.dataParser.parseDate(
+        firstRep == ''
+            ? this.plugin.settings.defaultFirstRepDate
+            : firstRep);
+  }
+  get note(): string { return this._noteTC.getValue(); }
+  get priority(): number {
+    return parseInt(this._priorityTC.getValue());
+  }
+  set priority(priority: number) { this._priorityTC.setValue(priority.toString()); }
+
+  onOpen() {
+
+    this.titleEl.setText(this._title);
 
     //
     // Queue
 
-    contentEl.appendText("Queue: ");
-    this.inputQueueField = new TextComponent(contentEl).setPlaceholder(
-      path.relative(
-        this.plugin.settings.queueFolderPath,
-        this.plugin.queue.queuePath
-      )
-    );
-    let folderFunc = () =>
-      this.plugin.app.vault.getAbstractFileByPath(
-        this.plugin.settings.queueFolderPath
-      ) as TFolder;
-    new FileSuggest(this.plugin, this.inputQueueField.inputEl, folderFunc);
-    contentEl.createEl("br");
+    new Setting(this.modalEl)
+        .setName('Queue')
+        .setDesc('') // TODO
+        .addText((text) => {
+          this._queueFolderTC = text;
+          text.setPlaceholder(
+              path.relative(
+                  this.plugin.settings.queueFolderPath,
+                  this.plugin.queue.queuePath
+              )
+          );
+          const folderFunc = () =>
+              this.plugin.app.vault.getAbstractFileByPath(
+                  this.plugin.settings.queueFolderPath
+              ) as TFolder;
+          new FileSuggest(this.plugin, text.inputEl, folderFunc);
+        });
 
     //
     // First Rep Date
 
-    const firstRepDate = this.plugin.settings.defaultFirstRepDate;
-    contentEl.appendText("First Rep Date: ");
-    this.inputFirstRep = new TextComponent(contentEl).setPlaceholder(
-      firstRepDate
-    );
-    new NaturalDateSuggest(this.plugin, this.inputFirstRep.inputEl);
-    contentEl.createEl("br");
-
-    this.inputFirstRep.inputEl.focus();
-    this.inputFirstRep.inputEl.select();
+    new Setting(this.modalEl)
+        .setName('First Rep Date')
+        .setDesc('') // TODO
+        .addText((text) => {
+          this._firstRepTC = text;
+          text.setPlaceholder(this.plugin.settings.defaultFirstRepDate);
+          new NaturalDateSuggest(this.plugin, text.inputEl);
+          text.inputEl.focus();
+          text.inputEl.select();
+        });
 
     //
     // Priority
 
-    let pMin = this.plugin.settings.defaultPriorityMin;
-    let pMax = this.plugin.settings.defaultPriorityMax;
-    contentEl.appendText("Priority: ");
-    this.inputSlider = new SliderComponent(contentEl)
-      .setLimits(0, 100, 1)
-      .setValue(PriorityUtils.getPriorityBetween(pMin, pMax))
-      .setDynamicTooltip();
-    contentEl.createEl("br");
+    new Setting(this.modalEl)
+        .setName('Priority')
+        .setDesc('') // TODO
+        .addText((text) => {
+          this._priorityTC = text;
+          const pMin = this.plugin.settings.defaultPriorityMin;
+          const pMax = this.plugin.settings.defaultPriorityMax;
+          text.setPlaceholder(`Range: ${pMin} ~ ${pMax}`);
+        });
 
     //
     // Notes
 
-    contentEl.appendText("Notes: ");
-    this.inputNoteField = new TextComponent(contentEl).setPlaceholder("Notes");
-    contentEl.createEl("br");
+    new Setting(this.modalEl)
+        .setName('Notes')
+        .setDesc('') // TODO
+        .addText((text) => {
+          this._noteTC = text;
+        });
 
     //
     // Button
 
-    contentEl.createEl("br");
-    new ButtonComponent(contentEl)
-      .setButtonText("Add to Queue")
-      .onClick(async () => {
-        await this.addToOutstanding();
-        this.close();
-      });
+    new ButtonComponent(this.modalEl)
+        .setButtonText('Add to Queue')
+        .onClick(async () => {
+          await this.addToOutstanding();
+          this.close();
+        });
 
     this.subscribeToEvents();
   }
@@ -103,13 +137,13 @@ abstract class ReviewModal extends ModalBase {
   subscribeToEvents() {
     this.contentEl.addEventListener("keydown", async (ev) => {
       if (ev.key === "PageUp") {
-        let curValue = this.inputSlider.getValue();
-        if (curValue < 95) this.inputSlider.setValue(curValue + 5);
-        else this.inputSlider.setValue(100);
+        let curValue = this.priority;
+        if (curValue < 95) this.priority = curValue + 5;
+        else this.priority = 100;
       } else if (ev.key === "PageDown") {
-        let curValue = this.inputSlider.getValue();
-        if (curValue > 5) this.inputSlider.setValue(curValue - 5);
-        else this.inputSlider.setValue(0);
+        let curValue = this.priority;
+        if (curValue > 5) this.priority = curValue -5;
+        else this.priority = 0;
       } else if (ev.key === "Enter") {
         await this.addToOutstanding();
         this.close();
@@ -117,61 +151,37 @@ abstract class ReviewModal extends ModalBase {
     });
   }
 
-  getQueuePath() {
-    const queue =
-      this.inputQueueField.getValue() === ""
-        ? path.relative(
-            this.plugin.settings.queueFolderPath,
-            this.plugin.queue.queuePath
-          )
-        : this.inputQueueField.getValue().withExtension(".md");
-
-    return normalizePath(
-      [this.plugin.settings.queueFolderPath, queue].join("/")
-    );
+  onClose() {
+    super.onClose();
+    this.containerEl.empty();
   }
 
   abstract addToOutstanding(): Promise<void>;
 }
 
 export class ReviewNoteModal extends ReviewModal {
+
   constructor(plugin: IW) {
     super(plugin, "Add Note to Outstanding?");
   }
 
-  onOpen() {
-    super.onOpen();
-  }
-
   async addToOutstanding() {
-    const dateStr = this.inputFirstRep.getValue();
-    const date = this.plugin.dates.parseDate(
-      dateStr === "" ? this.plugin.settings.defaultFirstRepDate : dateStr
-    );
-    if (!date) {
-      LogTo.Console("Failed to parse initial repetition date!");
+    if (!this.firstRep)
       return;
-    }
-
-    const queue = new Queue(this.plugin, this.getQueuePath());
+    const queue = new Queue(this.plugin, this.queueFolderPath);
     const file = this.plugin.files.getActiveNoteFile();
     if (!file) {
       LogTo.Console("Failed to add to outstanding.", true);
       return;
     }
     const link = this.plugin.files.toLinkText(file);
-    const row = new MarkdownTableRow(
-      link,
-      this.inputSlider.getValue(),
-      this.inputNoteField.getValue(),
-      1,
-      date
-    );
+    const row = new MarkdownTableRow(link, this.priority, this.note, 1, this.firstRep);
     await queue.add(row);
   }
 }
 
 export class ReviewFileModal extends ReviewModal {
+
   filePath: string;
 
   constructor(plugin: IW, filePath: string) {
@@ -184,35 +194,23 @@ export class ReviewFileModal extends ReviewModal {
   }
 
   async addToOutstanding() {
-    const dateStr = this.inputFirstRep.getValue();
-    const date = this.plugin.dates.parseDate(
-      dateStr === "" ? this.plugin.settings.defaultFirstRepDate : dateStr
-    );
-    if (!date) {
-      LogTo.Console("Failed to parse initial repetition date!");
+    if (!this.firstRep)
       return;
-    }
-
-    const queue = new Queue(this.plugin, this.getQueuePath());
+    const queue = new Queue(this.plugin, this.queueFolderPath);
     const file = this.plugin.files.getTFile(this.filePath);
     if (!file) {
       LogTo.Console("Failed to add to outstanding because file was null", true);
       return;
     }
     const link = this.plugin.files.toLinkText(file);
-    const row = new MarkdownTableRow(
-      link,
-      this.inputSlider.getValue(),
-      this.inputNoteField.getValue(),
-      1,
-      date
-    );
+    const row = new MarkdownTableRow(link, this.priority, this.note, 1, this.firstRep);
     await queue.add(row);
   }
 }
 
 export class ReviewBlockModal extends ReviewModal {
-  private customBlockRefInput: TextComponent;
+
+  private customBlockRefTC: TextComponent;
 
   constructor(plugin: IW) {
     super(plugin, "Add Block to Outstanding?");
@@ -220,34 +218,24 @@ export class ReviewBlockModal extends ReviewModal {
 
   onOpen() {
     super.onOpen();
-    let { contentEl } = this;
-    this.customBlockRefInput = new TextComponent(contentEl);
-    const br = contentEl.createEl("br");
-    this.titleNode.after(
-      "Block Ref Name: ",
-      this.customBlockRefInput.inputEl,
-      br
-    );
-    this.customBlockRefInput.inputEl.focus();
-    this.customBlockRefInput.inputEl.select();
+    new Setting(this.modalEl)
+        .setName('Block Ref Name')
+        .setDesc('') // TODO
+        .addText((text) => {
+          this.customBlockRefTC = text;
+        });
   }
 
   getCurrentLineNumber(): number | null {
-    return (this.app.workspace.activeLeaf
-      .view as MarkdownView).editor?.getCursor()?.line;
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView) as MarkdownView;
+    return view?.editor.getCursor()?.line;
   }
 
   async addToOutstanding() {
-    const dateStr = this.inputFirstRep.getValue();
-    const date = this.plugin.dates.parseDate(
-      dateStr === "" ? this.plugin.settings.defaultFirstRepDate : dateStr
-    );
-    if (!date) {
-      LogTo.Console("Failed to parse initial repetition date!");
+    if (!this.firstRep)
       return;
-    }
 
-    const queue = new Queue(this.plugin, this.getQueuePath());
+    const queue = new Queue(this.plugin, this.queueFolderPath);
     const file = this.plugin.files.getActiveNoteFile();
     if (!file) {
       LogTo.Console("Failed to add to outstanding.", true);
@@ -260,7 +248,7 @@ export class ReviewBlockModal extends ReviewModal {
       return;
     }
 
-    const customRefName = this.customBlockRefInput.getValue();
+    const customRefName = this.customBlockRefTC.getValue();
     const blockLink = await this.plugin.blocks.createBlockRefIfNotExists(
       lineNumber,
       file,
@@ -272,13 +260,7 @@ export class ReviewBlockModal extends ReviewModal {
     }
 
     await queue.add(
-      new MarkdownTableRow(
-        blockLink,
-        this.inputSlider.getValue(),
-        this.inputNoteField.getValue(),
-        1,
-        date
-      )
+      new MarkdownTableRow(blockLink, this.priority, this.note, 1, this.firstRep)
     );
   }
 }

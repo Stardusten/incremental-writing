@@ -8,7 +8,7 @@ import {
   debounce,
   TAbstractFile,
   normalizePath,
-  MarkdownView,
+  MarkdownView, Editor,
 } from "obsidian";
 import { Queue } from "./queue";
 import { LogTo } from "./logger";
@@ -46,8 +46,6 @@ export default class IW extends Plugin {
   public readonly dates: DateParser = new DateParser(this.app);
 
   private autoAddNewNotesOnCreateEvent: EventRef;
-  private checkTagsOnModifiedEvent: EventRef;
-  private tagMap: Map<TFile, Set<string>> = new Map();
 
   async loadConfig() {
     this.settings = this.settings = Object.assign(
@@ -75,18 +73,14 @@ export default class IW extends Plugin {
     );
   }
 
-  createTagMap() {
-    const notes: TFile[] = this.app.vault.getMarkdownFiles();
-    for (const note of notes) {
-      const fileCachedData = this.app.metadataCache.getFileCache(note) || {};
-      const tags = new Set(getAllTags(fileCachedData) || []);
-      this.tagMap.set(note, tags);
-    }
-  }
-
   async onload() {
     LogTo.Console("Loading...");
     await this.loadConfig();
+    const naturalLanguageDates = (this.app as any).plugins.getPlugin(
+        "nldates-obsidian"
+    );
+    if (!naturalLanguageDates)
+      return;
     this.addSettingTab(new IWSettingsTab(this.app, this));
     this.registerCommands();
     this.subscribeToEvents();
@@ -94,75 +88,6 @@ export default class IW extends Plugin {
 
   randomWithinInterval(min: number, max: number) {
     return Math.floor(Math.random() * (max - min + 1) + min);
-  }
-
-  checkTagsOnModified() {
-    this.checkTagsOnModifiedEvent = this.app.vault.on(
-      "modify",
-      debounce(
-        async (file) => {
-          if (!(file instanceof TFile) || file.extension !== "md") {
-            return;
-          }
-
-          const fileCachedData =
-            this.app.metadataCache.getFileCache(file) || {};
-
-          const currentTags = new Set(getAllTags(fileCachedData) || []);
-          const lastTags = this.tagMap.get(file) || new Set<string>();
-
-          let setsEqual = (a: Set<string>, b: Set<string>) =>
-            a.size === b.size && [...a].every((value) => b.has(value));
-          if (setsEqual(new Set(currentTags), new Set(lastTags))) {
-            LogTo.Debug("No tag changes.");
-            return;
-          }
-
-          LogTo.Debug("Updating tags.");
-          this.tagMap.set(file, currentTags);
-          const newTags = [...currentTags].filter((x) => !lastTags.has(x)); // set difference
-          LogTo.Debug("Added new tags: " + newTags.toString());
-
-          const queueFiles = this.getQueueFiles();
-          LogTo.Debug("Queue Files: " + queueFiles.toString());
-
-          const queueTagMap = this.settings.queueTagMap;
-          const newQueueTags = newTags
-            .map((tag) => tag.substr(1))
-            .filter((tag) =>
-              Object.values(queueTagMap).some((arr) => arr.contains(tag))
-            );
-
-          LogTo.Debug("New Queue Tags: " + newQueueTags.toString());
-          for (const queueTag of newQueueTags) {
-            const addToQueueFiles = queueFiles
-              .filter((f) => queueTagMap[f.name.substr(0, f.name.length - 3)])
-              .filter((f) =>
-                queueTagMap[f.name.substr(0, f.name.length - 3)].contains(
-                  queueTag
-                )
-              );
-
-            for (const queueFile of addToQueueFiles) {
-              const queue = new Queue(this, queueFile.path);
-              LogTo.Debug(`Adding ${file.name} to ${queueFile.name}`);
-              const link = this.files.toLinkText(file);
-              const min = this.settings.defaultPriorityMin;
-              const max = this.settings.defaultPriorityMax;
-              const priority = this.randomWithinInterval(min, max);
-              const date = this.dates.parseDate(
-                this.settings.defaultFirstRepDate
-              );
-              const row = new MarkdownTableRow(link, priority, "", 1, date);
-              await queue.add(row);
-            }
-          }
-          // already debounced 2 secs but not throttled, true on resetTimer throttles the callback
-        },
-        3000,
-        true
-      )
-    );
   }
 
   autoAddNewNotesOnCreate() {
@@ -354,10 +279,8 @@ export default class IW extends Plugin {
     this.addCommand({
       id: "add-links-in-selected-text",
       name: "Add links in selected text.",
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        const editor = view?.editor;
-        const file = view?.file;
+      editorCheckCallback: (checking, editor: Editor, view: MarkdownView) => {
+        const file = this.app.workspace.getActiveFile();
 
         if (file && editor) {
           if (!checking) {
@@ -520,8 +443,6 @@ export default class IW extends Plugin {
       this.createStatusBar();
       const queuePath = this.getDefaultQueuePath();
       await this.loadQueue(queuePath);
-      this.createTagMap();
-      this.checkTagsOnModified();
       this.addSearchButton();
       this.autoAddNewNotesOnCreate();
     });
@@ -583,7 +504,6 @@ export default class IW extends Plugin {
   unsubscribeFromEvents() {
     for (let e of [
       this.autoAddNewNotesOnCreateEvent,
-      this.checkTagsOnModifiedEvent,
     ]) {
       this.app.vault.offref(e);
       e = undefined;
